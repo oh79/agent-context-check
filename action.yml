@@ -1,0 +1,30 @@
+name: Agent Context Package Check
+description: Check whether agent instruction references survive packaging and installation, offline and without dependencies.
+branding:
+  icon: package
+  color: blue
+inputs:
+  mode:
+    description: 'compare checks source against an unpacked artifact; check validates local Markdown links.'
+    required: false
+    default: compare
+  source:
+    description: Source directory, relative to the workflow workspace or absolute.
+    required: false
+    default: '.'
+  artifact:
+    description: Unpacked artifact directory with the same relative layout as source. Required in compare mode.
+    required: false
+  files:
+    description: Optional newline-separated instruction file paths, relative to source.
+    required: false
+outputs:
+  issues-count:
+    description: Number of reported issues. Unset if the action cannot run.
+  files-checked:
+    description: Number of source instruction files checked.
+  references-checked:
+    description: Number of local references checked.
+runs:
+  using: node24
+  main: action/run.js

@@ -87,6 +87,13 @@ test('checks local Markdown images', async (t) => {
   assert.equal(result.issues[0].target, 'assets/demo.png');
 });
 
+test('skips the explicit URL placeholder while checking ordinary local names', async t => {
+  const root = await fixture(t, { 'AGENTS.md': '> [Title](URL)\n[Real](MISSING)\n' });
+  const result = await checkProject({ root });
+  assert.equal(result.linksChecked, 1);
+  assert.equal(result.issues[0].target, 'MISSING');
+});
+
 test('does not treat an HTML comment marker inside inline code as a comment', async (t) => {
   const root = await fixture(t, { 'AGENTS.md': '`<!--` marks an HTML comment.\n[Build](missing.md)\n' });
   const result = await checkProject({ root });

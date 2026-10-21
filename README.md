@@ -3,114 +3,136 @@
 [![CI](https://github.com/oh79/agent-context-check/actions/workflows/ci.yml/badge.svg)](https://github.com/oh79/agent-context-check/actions/workflows/ci.yml)
 [한국어](README.ko.md) · [MIT](LICENSE)
 
-Catch broken local Markdown links in `AGENTS.md`, `CLAUDE.md`, and `SKILL.md` before a coding agent follows them.
+**Catch skill references that work in source but disappear from the package you ship.**
 
-Instruction files often point to a build guide, architecture decision, or another skill. Renaming one of those files can silently leave an agent with incomplete context. This tool checks that local Markdown link targets exist and stay inside the project.
+An agent can receive `SKILL.md` while its `references/` or `scripts/` files are left behind by packaging or installation. Compare the source and the prepared distribution directory before publishing. Findings point to the instruction file and line, and distinguish a broken source reference from a file missing in the artifact.
 
 **Zero dependencies. Node.js 20+. Offline. Read-only. No API key.**
 
-## Try it
+## Compare a source and a distribution
 
 ```sh
-git clone https://github.com/oh79/agent-context-check.git
-cd agent-context-check
-node bin/agent-context-check.js --root /path/to/your/project
+npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill
 ```
 
-Run without a checkout, directly from the tagged GitHub package:
+Use the same relative layout in both roots. For a tarball with a top-level `package/` folder, pass the unpacked `package/` directory as the artifact. Create or unpack the artifact with your normal build tools first. The checker never installs a skill, runs its commands, or extracts an archive.
 
 ```sh
-npm exec --yes --package=github:oh79/agent-context-check#v0.1.0 -- agent-context-check --root .
+# Machine-readable findings
+npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill --json
+
+# Optional instruction files, relative to the source root
+npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill SKILL.md
 ```
 
-The npm command downloads the package; the checker itself never accesses the network. The package is distributed through GitHub; it has not been published to the npm registry.
+The tool checks instruction files themselves and referenced local targets. A missing `SKILL.md` in the artifact is an error, even if its referenced files are present. Existing file/directory types must agree. This checks availability and type, not byte-for-byte equality or whether the artifact's instructions changed.
 
-An instruction such as `[Build guide](docs/old-build.md)` reports an issue when the file is gone. The report includes the source file, line, target, and reason. Fix the link or restore the document, then run again.
+## References supported in comparison mode
 
-Check specific Markdown files instead of discovering instruction files:
+- Local Markdown links, images, and reference links in discovered `AGENTS.md`, `CLAUDE.md`, and `SKILL.md` files.
+- Explicit literal paths under `references/`, `scripts/`, and `assets/` in inline code.
+- Literal `${CLAUDE_SKILL_DIR}/...` references, including quoted shell examples. These resolve from the instruction file's directory.
+- Root-relative Markdown destinations, percent-encoded names, and Unicode filenames.
 
-```sh
-node bin/agent-context-check.js --root /path/to/project README.md docs/setup.md
-node bin/agent-context-check.js --root /path/to/project --json
-```
+Dynamic shell expressions and globs are not executed or expanded. This is a static checker with a deliberately limited parser, not a full Markdown or shell parser. It does not prove that an agent follows the instructions. The literal placeholder destination `URL` is treated as an example, not a local filename.
 
-## What gets checked
+Sources and artifacts are resolved to real filesystem roots. The checker reports path and symlink escapes. Automatic discovery skips symlink files/directories and `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, and `vendor`. Selecting a distribution directory itself as the artifact root is supported. Run on trusted trees; this is not a filesystem sandbox.
 
-- Automatic discovery of `AGENTS.md`, `CLAUDE.md`, and `SKILL.md`, including nested folders.
-- Local inline links, images, and reference links, including angle-bracket destinations and optional titles.
-- Relative paths resolved from the source document; `/docs/guide.md` resolves from the project root.
-- Percent-encoded names, spaces in angle-bracket paths, and Unicode filenames.
-- Missing targets, invalid local targets, unreadable input, and paths or symlinks escaping the real project root.
+## GitHub Action
 
-Existing files and directories are valid targets. Missing files are reported even when they have a `#fragment` or `?query` suffix. Fragments and queries themselves are not validated.
-
-## Deliberate limits
-
-This is a focused Markdown link checker, not a complete CommonMark implementation or an instruction-quality evaluator.
-
-- Bare paths and paths inside backticks are not checked. Use `[guide](docs/guide.md)` for references you want to verify.
-- Code fences, inline code, and HTML comments are ignored. HTML links and MDX expressions are not parsed.
-- Web URLs, other URL schemes, protocol-relative URLs, and anchor-only links are ignored. No remote availability check runs.
-- Undefined reference labels cannot reliably be distinguished from ordinary bracketed prose and are ignored.
-- Automatic discovery skips symlink files and directories and common generated folders: `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, and `vendor`. Explicit input paths are checked for containment after resolving symlinks.
-- The check confirms filesystem existence at the time of the scan. It does not guarantee that a model reads the file, understands it, or follows it. Run only on repositories you trust; this is not a filesystem sandbox.
-
-## Exit status
-
-| Status | Meaning |
-| --- | --- |
-| `0` | Checked files have no reported issues |
-| `1` | Issues found, including no discovered instruction files |
-| `2` | Invalid invocation or an unusable root directory |
-
-`--json` emits `{ filesChecked, linksChecked, issues }`. Each issue includes `file`, `line`, `target`, `code`, and `message`. Issue codes include `missing-target`, `outside-root`, `invalid-target`, `read-error`, and `no-files`.
-
-## GitHub Actions
-
-Check your own project's instructions in CI:
+Add this step **after your existing build or unpack step**, with the two corresponding skill directories:
 
 ```yaml
-name: Instruction links
-on: [push, pull_request]
-permissions:
-  contents: read
-jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm exec --yes --package=github:oh79/agent-context-check#v0.1.0 -- agent-context-check --root .
+- uses: oh79/agent-context-check@v0.2.0
+  with:
+    source: ./skill
+    artifact: ./dist/skill
+```
+
+The action uses GitHub's Node.js 24 runtime, requires no npm install, and produces line annotations for findings. It does not need a token or write permission to your repository. Pin a release commit SHA if your workflow requires immutable dependencies.
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `compare` | `compare` or `check` |
+| `source` | `.` | Source root; also the project root in check mode |
+| `artifact` | — | Prepared artifact root; required in comparison mode |
+| `files` | — | Optional newline-separated paths, relative to source |
+
+Outputs: `issues-count`, `files-checked`, and `references-checked`. Findings fail the action. Invalid configuration also fails; it is not reported as a successful empty scan.
+
+To check only existing local Markdown links, without a distribution:
+
+```yaml
+- uses: oh79/agent-context-check@v0.2.0
+  with:
+    mode: check
+    source: .
+    files: AGENTS.md
+```
+
+## Check local Markdown links
+
+The original checker remains available:
+
+```sh
+npx --yes agent-context-check@0.2.0 --root /path/to/project
+npx --yes agent-context-check@0.2.0 --root /path/to/project --json
+npx --yes agent-context-check@0.2.0 --root /path/to/project README.md docs/setup.md
+```
+
+Check mode ignores code spans/fences and checks Markdown link destinations only. File and directory targets are valid. Fragment IDs, query strings, external URLs, HTML links, undefined reference labels, and plain prose paths are not validated. It does not recursively follow documents linked from instruction files.
+
+`npx` downloads the package when needed; the scanner itself never uses the network. To run from a checkout instead, use `node bin/agent-context-check.js` with the same arguments. A GitHub package installation is also available:
+
+```sh
+npm exec --yes --package=github:oh79/agent-context-check#v0.2.0 -- agent-context-check --help
 ```
 
 ## JavaScript API
 
 ```js
-import { checkProject } from './src/index.js';
+import { checkProject, comparePackage } from 'agent-context-check';
 
-const report = await checkProject({ root: '/path/to/project' });
-console.log(report.issues);
-
-// Optional: check only these files, relative to root.
-const selected = await checkProject({
-  root: '/path/to/project',
-  files: ['AGENTS.md', 'docs/setup.md'],
+const comparison = await comparePackage({
+  source: '/path/to/skill-source',
+  artifact: '/path/to/unpacked-package',
+  files: ['SKILL.md'], // optional: otherwise discover instruction files
 });
+console.log(comparison);
+
+const links = await checkProject({ root: '/path/to/project' });
+console.log(links);
 ```
 
-For another project, install the tagged GitHub package and import from `agent-context-check`.
+Comparison reports contain `{ filesChecked, referencesChecked, issues }`. Check reports retain `{ filesChecked, linksChecked, issues }`. Each issue includes `file`, `line`, `target`, `code`, and `message`; comparison findings include source/artifact existence flags where inspected.
 
-## Development
+## Exit status
+
+| Status | Meaning |
+| --- | --- |
+| `0` | No reported issues in the supported references |
+| `1` | Findings, including no discovered instruction files |
+| `2` | Invalid invocation or unusable root directories |
+
+Zero findings is not a claim that every reference or instruction in a document was understood.
+
+## Examples and development
 
 ```sh
+git clone https://github.com/oh79/agent-context-check.git
+cd agent-context-check
 npm test
 npm run check
 npm pack --dry-run
+node bin/agent-context-check.js compare --source examples/package-source --artifact examples/package-complete
+node bin/agent-context-check.js compare --source examples/package-source --artifact examples/package-incomplete --json
 ```
 
-No install step or generated build output is required. See [contributing](CONTRIBUTING.md) for how to report a parser edge case. Examples live in [examples](examples/README.md).
+The incomplete example intentionally fails. No install or build step is required. See [contributing](CONTRIBUTING.md), [examples](examples/README.md), and the [real package validation report](docs/validation-0.2.0.md).
+
+## Early feedback
+
+Do you publish a skill package? Try comparison against the exact folder your users receive. Open an issue with a minimal reproducible case and whether a finding is correct or a false alarm. Please remove secrets and private paths. Initial validation examples do not establish external adoption or ecosystem impact.
 
 ## License
 
