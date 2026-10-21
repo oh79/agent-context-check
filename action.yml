@@ -15,6 +15,9 @@ inputs:
   artifact:
     description: Unpacked artifact directory with the same relative layout as source. Required in compare mode.
     required: false
+  plugin-root:
+    description: 'Optional relative plugin root inside both source and artifact; use . for complete plugin trees. Compare mode only.'
+    required: false
   files:
     description: Optional newline-separated instruction file paths, relative to source.
     required: false

@@ -37,7 +37,7 @@ jobs:
           for (const name of ['source', 'complete', 'missing']) {
             const root = `.action-smoke/${name}`;
             await mkdir(`${root}/references`, { recursive: true });
-            await writeFile(`${root}/SKILL.md`, '# Demo\n[Guide](references/guide.md)\n');
+            await writeFile(`${root}/SKILL.md`, '# Demo\n[Guide](references/guide.md)\n`${CLAUDE_PLUGIN_ROOT}/references/guide.md`\n');
             if (name !== 'missing') await writeFile(`${root}/references/guide.md`, '# Guide\n');
           }
           NODE
@@ -47,6 +47,7 @@ jobs:
         with:
           source: .action-smoke/source
           artifact: .action-smoke/complete
+          plugin-root: '.'
       - name: Detect a deliberately removed reference
         id: missing
         continue-on-error: true
@@ -54,6 +55,14 @@ jobs:
         with:
           source: .action-smoke/source
           artifact: .action-smoke/missing
+          plugin-root: '.'
+      - name: Report undeclared plugin context
+        id: unresolved
+        continue-on-error: true
+        uses: ./
+        with:
+          source: .action-smoke/source
+          artifact: .action-smoke/complete
       - name: Check local links with the reusable action
         uses: ./
         with:
@@ -67,12 +76,16 @@ jobs:
           COMPLETE_REFERENCES: ${{ steps.complete.outputs.references-checked }}
           MISSING_OUTCOME: ${{ steps.missing.outcome }}
           MISSING_ISSUES: ${{ steps.missing.outputs.issues-count }}
+          UNRESOLVED_OUTCOME: ${{ steps.unresolved.outcome }}
+          UNRESOLVED_ISSUES: ${{ steps.unresolved.outputs.issues-count }}
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           assert.equal(process.env.COMPLETE_ISSUES, '0');
           assert.equal(process.env.COMPLETE_FILES, '1');
-          assert.equal(process.env.COMPLETE_REFERENCES, '1');
+          assert.equal(process.env.COMPLETE_REFERENCES, '2');
           assert.equal(process.env.MISSING_OUTCOME, 'failure');
-          assert.equal(process.env.MISSING_ISSUES, '1');
+          assert.equal(process.env.MISSING_ISSUES, '2');
+          assert.equal(process.env.UNRESOLVED_OUTCOME, 'failure');
+          assert.equal(process.env.UNRESOLVED_ISSUES, '1');
           NODE

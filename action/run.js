@@ -9,11 +9,13 @@ try {
   const mode = process.env.INPUT_MODE || 'compare';
   if (!['check', 'compare'].includes(mode)) throw new Error('mode must be compare or check');
   if (mode === 'compare' && !process.env.INPUT_ARTIFACT) throw new Error('artifact is required in compare mode');
+  const pluginRoot = process.env['INPUT_PLUGIN-ROOT'] || undefined;
+  if (mode === 'check' && pluginRoot !== undefined) throw new Error('plugin-root is supported only in compare mode');
   const workspace = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd());
   const source = path.resolve(workspace, process.env.INPUT_SOURCE || '.');
   const files = (process.env.INPUT_FILES || '').split(/\r?\n/).map(file => file.trim()).filter(Boolean);
   const report = mode === 'compare'
-    ? await scanner.comparePackage({ source, artifact: path.resolve(workspace, process.env.INPUT_ARTIFACT), files })
+    ? await scanner.comparePackage({ source, artifact: path.resolve(workspace, process.env.INPUT_ARTIFACT), files, pluginRoot })
     : await scanner.checkProject({ root: source, files });
   const references = report.referencesChecked ?? report.linksChecked;
   for (const issue of report.issues) {

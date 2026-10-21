@@ -31,11 +31,23 @@ function run(inputs, extra = {}) {
       INPUT_SOURCE: inputs.source,
       INPUT_ARTIFACT: inputs.artifact,
       INPUT_FILES: '',
+      'INPUT_PLUGIN-ROOT': '',
       GITHUB_WORKSPACE: inputs.workspace,
       GITHUB_OUTPUT: inputs.output,
       ...extra,
     },
   });
+}
+
+async function pluginFixture(t, { damaged = false } = {}) {
+  const input = await fixture(t);
+  for (const directory of [input.source, input.artifact]) {
+    await mkdir(path.join(directory, 'scripts'));
+    await writeFile(path.join(directory, 'SKILL.md'), '# Deploy\n`"${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`\n');
+  }
+  await writeFile(path.join(input.source, 'scripts/gate.mjs'), '');
+  if (!damaged) await writeFile(path.join(input.artifact, 'scripts/gate.mjs'), '');
+  return input;
 }
 
 test('action compares complete packages and writes integer workflow outputs', async (t) => {
@@ -86,4 +98,35 @@ test('action escapes annotation property punctuation and encoded command-like ta
   assert.match(result.stdout, /::error file=source%2C100%25\/SKILL\.md,line=1::/);
   assert.match(result.stdout, /bad%250A::warning::oops\.md/);
   assert.doesNotMatch(result.stdout, /\n::warning::/);
+});
+
+test('action fails unresolved plugin references with line evidence and real counts', async t => {
+  const input = await pluginFixture(t);
+  const result = run(input);
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.match(result.stdout, /::error file=source\/SKILL\.md,line=2::\[unresolved-variable\]/);
+  assert.equal(await readFile(input.output, 'utf8'), 'issues-count=1\nfiles-checked=1\nreferences-checked=1\n');
+});
+
+test('action resolves plugin references using its plugin-root input', async t => {
+  const input = await pluginFixture(t);
+  const result = run(input, { 'INPUT_PLUGIN-ROOT': '.' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(await readFile(input.output, 'utf8'), 'issues-count=0\nfiles-checked=1\nreferences-checked=1\n');
+});
+
+test('action reports missing scripts under an explicit plugin root', async t => {
+  const input = await pluginFixture(t, { damaged: true });
+  const result = run(input, { 'INPUT_PLUGIN-ROOT': '.' });
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.match(result.stdout, /artifact-missing.*CLAUDE_PLUGIN_ROOT/);
+  assert.equal(await readFile(input.output, 'utf8'), 'issues-count=1\nfiles-checked=1\nreferences-checked=1\n');
+});
+
+test('action rejects plugin-root in check mode as invalid configuration', async t => {
+  const input = await fixture(t);
+  const result = run(input, { INPUT_MODE: 'check', 'INPUT_PLUGIN-ROOT': '.' });
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.match(result.stdout, /plugin-root.*compare/);
+  await assert.rejects(readFile(input.output), { code: 'ENOENT' });
 });

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { checkProject, comparePackage } from '../src/index.js';
 
 const help = `Usage: agent-context-check [--root DIRECTORY] [--json] [FILES...]
-       agent-context-check compare --source DIRECTORY --artifact DIRECTORY [--json] [FILES...]
+       agent-context-check compare --source DIRECTORY --artifact DIRECTORY [--plugin-root DIRECTORY] [--json] [FILES...]
 
 Find broken local Markdown links in AGENTS.md, CLAUDE.md and SKILL.md.
 Pass file paths to check other Markdown files. Paths are relative to --root.
@@ -11,6 +11,8 @@ Pass file paths to check other Markdown files. Paths are relative to --root.
   --root DIRECTORY  Project boundary (default: current directory)
   --source DIRECTORY   Source tree for comparison
   --artifact DIRECTORY Already-created artifact tree for comparison
+  --plugin-root DIRECTORY Relative plugin root inside both comparison trees
+                          Use . for complete plugin trees; compare mode only
   --json            Print a JSON report
   --help, -h        Show this help
   --version, -v     Show the version
@@ -28,6 +30,7 @@ try {
   let root = process.cwd();
   let source;
   let artifact;
+  let pluginRoot;
   let json = false;
   let positional = false;
   let showHelp = false;
@@ -40,10 +43,11 @@ try {
     else if (arg === '--root' && !comparing) {
       if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error('--root requires a directory');
       root = args[++i];
-    } else if ((arg === '--source' || arg === '--artifact') && comparing) {
+    } else if (['--source', '--artifact', '--plugin-root'].includes(arg) && comparing) {
       if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error(`${arg} requires a directory`);
       if (arg === '--source') source = args[++i];
-      else artifact = args[++i];
+      else if (arg === '--artifact') artifact = args[++i];
+      else pluginRoot = args[++i];
     } else if (arg === '--json') json = true;
     else if (arg === '--help' || arg === '-h') showHelp = true;
     else if (arg === '--version' || arg === '-v') showVersion = true;
@@ -55,7 +59,7 @@ try {
     const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
     process.stdout.write(`${version}\n`);
   } else {
-    const report = comparing ? await comparePackage({ source, artifact, files }) : await checkProject({ root, files });
+    const report = comparing ? await comparePackage({ source, artifact, files, pluginRoot }) : await checkProject({ root, files });
     if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     else {
       for (const issue of report.issues) {

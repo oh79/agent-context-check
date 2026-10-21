@@ -222,35 +222,49 @@ export async function checkProject({ root = process.cwd(), files } = {}) {
 }
 
 const skillVariable = '${CLAUDE_SKILL_DIR}/';
+const pluginVariable = '${CLAUDE_PLUGIN_ROOT}/';
 const dynamicReference = target => /[$*?{}<>]|(?:^|\/)\.\.\.(?:\/|$)|…/.test(target);
 
 function packageReferences(source) {
   const references = markdownLinks(source).map(reference => ({ ...reference, kind: 'markdown' }));
   for (const part of markdownParts(source).code) {
     const trimmed = part.text.trim();
-    // Option-like suffixes make an inline span an ambiguous command, not a certain path literal.
-    if (!part.fenced && /^(?:\.\/)?(?:scripts|references|assets)\//.test(trimmed) && !/[\r\n]|\s-(?:\S|$)/.test(trimmed)) {
+    // Script arguments and option suffixes make a span ambiguous rather than a certain path literal.
+    const commandLike = /[\r\n]|\s-(?:\S|$)/.test(trimmed) || /^\S+\.(?:[cm]?[jt]s|sh|bash|zsh|fish|py|rb|pl|php|ps1|bat|cmd|exe)\s+\S/i.test(trimmed);
+    if (!part.fenced && /^(?:\.\/)?(?:scripts|references|assets|docs|templates)\//.test(trimmed) && !commandLike) {
       references.push({ target: trimmed, line: source.slice(0, part.start).split('\n').length, kind: 'literal' });
     }
-    for (const match of part.text.matchAll(/\$\{CLAUDE_SKILL_DIR\}\//g)) {
+    for (const match of part.text.matchAll(/\$\{CLAUDE_(?:SKILL_DIR|PLUGIN_ROOT)\}\//g)) {
       const begin = match.index;
+      const prefix = part.text.slice(0, begin);
+      // A path nested in parameter expansion or used as an explicit output is not a required input.
+      if (/\$\{[^}]*$/.test(prefix) || /(?:^|\s)(?:\d*>{1,2}|--output(?:=|\s+)|-o\s+)\s*["']?$/.test(prefix)) continue;
       const quote = part.text[begin - 1];
-      const rest = part.text.slice(begin + skillVariable.length);
+      const rest = part.text.slice(begin + match[0].length);
       let tail;
       if (quote === '"' || quote === "'") {
         const close = rest.indexOf(quote);
         if (close === -1) continue;
         tail = rest.slice(0, close);
       } else tail = /^[^\s"'`;|&<>)]*/.exec(rest)[0];
-      references.push({ target: skillVariable + tail, line: source.slice(0, part.start + begin).split('\n').length, kind: 'literal' });
+      references.push({ target: match[0] + tail, line: source.slice(0, part.start + begin).split('\n').length, kind: 'literal' });
     }
   }
   return references.sort((a, b) => a.line - b.line);
 }
 
-async function inspectTarget(root, candidate) {
+async function inspectTarget(root, candidate, scope = root) {
   try {
-    if (!contained(root, candidate) || !contained(root, await realAncestor(candidate))) return { code: 'outside-root', message: 'Destination is outside its root' };
+    if (!contained(root, candidate) || !contained(scope, candidate)) return { code: 'outside-root', message: 'Destination is outside its root' };
+    const ancestor = await realAncestor(candidate);
+    if (!contained(root, ancestor)) return { code: 'outside-root', message: 'Destination is outside its root' };
+    if (scope !== root) {
+      try {
+        if (!contained(await realpath(scope), ancestor)) return { code: 'outside-root', message: 'Destination is outside its declared plugin root' };
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      }
+    }
     const info = await stat(candidate);
     return { exists: true, kind: info.isFile() ? 'file' : info.isDirectory() ? 'directory' : 'other' };
   } catch (error) {
@@ -260,9 +274,10 @@ async function inspectTarget(root, candidate) {
 }
 
 /** Compare explicit instruction references against an already-created artifact tree. */
-export async function comparePackage({ source, artifact, files } = {}) {
+export async function comparePackage({ source, artifact, files, pluginRoot } = {}) {
   if (typeof source !== 'string' || !source) throw new TypeError('source directory is required');
   if (typeof artifact !== 'string' || !artifact) throw new TypeError('artifact directory is required');
+  if (pluginRoot !== undefined && (typeof pluginRoot !== 'string' || !pluginRoot.trim() || /[\x00-\x1f\x7f]/.test(pluginRoot) || path.isAbsolute(pluginRoot) || path.win32.isAbsolute(pluginRoot) || pluginRoot.split(/[\\/]/).includes('..'))) throw new TypeError('pluginRoot must be a relative directory inside both roots, without parent traversal');
   const sourceRoot = await realpath(path.resolve(source));
   const artifactRoot = await realpath(path.resolve(artifact));
   if (!(await stat(sourceRoot)).isDirectory() || !(await stat(artifactRoot)).isDirectory()) throw new Error('Source and artifact roots must be directories');
@@ -290,7 +305,8 @@ export async function comparePackage({ source, artifact, files } = {}) {
       const { target, line, kind } = reference;
       if (!target || target === 'URL' || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(target)) continue;
       const variablePath = target.startsWith(skillVariable);
-      const rawPath = variablePath ? target.slice(skillVariable.length) : target;
+      const pluginPath = target.startsWith(pluginVariable);
+      const rawPath = variablePath ? target.slice(skillVariable.length) : pluginPath ? target.slice(pluginVariable.length) : target;
       if (!rawPath || dynamicReference(kind === 'markdown' ? rawPath.split(/[?#]/, 1)[0] : rawPath)) continue;
       const pathname = kind === 'markdown' ? rawPath.split(/[?#]/, 1)[0] : rawPath;
       if (!pathname) continue;
@@ -303,14 +319,24 @@ export async function comparePackage({ source, artifact, files } = {}) {
         issue(name, line, target, 'invalid-target', 'Local reference has invalid encoding or path characters');
         continue;
       }
-      const candidate = decoded.startsWith('/') ? path.resolve(sourceRoot, `.${decoded}`) : path.resolve(path.dirname(file), decoded);
+      if (pluginPath && pluginRoot === undefined) {
+        const key = `${line}:${target}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        report.referencesChecked++;
+        issue(name, line, target, 'unresolved-variable', 'CLAUDE_PLUGIN_ROOT has no declared pluginRoot; compare complete plugin trees with an explicit root or make the resource skill-local');
+        continue;
+      }
+      const sourceScope = pluginPath ? path.resolve(sourceRoot, pluginRoot) : sourceRoot;
+      const artifactScope = pluginPath ? path.resolve(artifactRoot, pluginRoot) : artifactRoot;
+      const candidate = pluginPath ? path.resolve(sourceScope, decoded) : decoded.startsWith('/') ? path.resolve(sourceRoot, `.${decoded}`) : path.resolve(path.dirname(file), decoded);
       const key = `${line}:${candidate}`;
       if (seen.has(key)) continue;
       seen.add(key);
       report.referencesChecked++;
-      const original = await inspectTarget(sourceRoot, candidate);
+      const original = await inspectTarget(sourceRoot, candidate, sourceScope);
       if (original.code) { issue(name, line, target, original.code, `Source reference: ${original.message}`); continue; }
-      const deployed = await inspectTarget(artifactRoot, path.resolve(artifactRoot, path.relative(sourceRoot, candidate)));
+      const deployed = await inspectTarget(artifactRoot, path.resolve(artifactRoot, path.relative(sourceRoot, candidate)), artifactScope);
       const states = { sourceExists: original.exists, ...(deployed.exists !== undefined ? { artifactExists: deployed.exists } : {}) };
       if (deployed.code) issue(name, line, target, deployed.code, `Artifact reference: ${deployed.message}`, states);
       else if (!original.exists) issue(name, line, target, 'source-missing', 'Reference does not exist in source', states);

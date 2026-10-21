@@ -12,17 +12,17 @@ An agent can receive `SKILL.md` while its `references/` or `scripts/` files are 
 ## Compare a source and a distribution
 
 ```sh
-npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill
+npx --yes agent-context-check@0.3.0 compare --source ./skill --artifact ./dist/skill
 ```
 
 Use the same relative layout in both roots. For a tarball with a top-level `package/` folder, pass the unpacked `package/` directory as the artifact. Create or unpack the artifact with your normal build tools first. The checker never installs a skill, runs its commands, or extracts an archive.
 
 ```sh
 # Machine-readable findings
-npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill --json
+npx --yes agent-context-check@0.3.0 compare --source ./skill --artifact ./dist/skill --json
 
 # Optional instruction files, relative to the source root
-npx --yes agent-context-check@0.2.0 compare --source ./skill --artifact ./dist/skill SKILL.md
+npx --yes agent-context-check@0.3.0 compare --source ./skill --artifact ./dist/skill SKILL.md
 ```
 
 The tool checks instruction files themselves and referenced local targets. A missing `SKILL.md` in the artifact is an error, even if its referenced files are present. Existing file/directory types must agree. This checks availability and type, not byte-for-byte equality or whether the artifact's instructions changed.
@@ -30,20 +30,35 @@ The tool checks instruction files themselves and referenced local targets. A mis
 ## References supported in comparison mode
 
 - Local Markdown links, images, and reference links in discovered `AGENTS.md`, `CLAUDE.md`, and `SKILL.md` files.
-- Explicit literal paths under `references/`, `scripts/`, and `assets/` in inline code.
+- Explicit literal paths under `references/`, `scripts/`, `assets/`, `docs/`, and `templates/` in inline code.
 - Literal `${CLAUDE_SKILL_DIR}/...` references, including quoted shell examples. These resolve from the instruction file's directory.
+- Literal `${CLAUDE_PLUGIN_ROOT}/...` references. Without a declared plugin root, comparison reports `unresolved-variable` instead of silently passing an unknown installation context.
 - Root-relative Markdown destinations, percent-encoded names, and Unicode filenames.
 
 Dynamic shell expressions and globs are not executed or expanded. This is a static checker with a deliberately limited parser, not a full Markdown or shell parser. It does not prove that an agent follows the instructions. The literal placeholder destination `URL` is treated as an example, not a local filename.
 
 Sources and artifacts are resolved to real filesystem roots. The checker reports path and symlink escapes. Automatic discovery skips symlink files/directories and `.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, and `vendor`. Selecting a distribution directory itself as the artifact root is supported. Run on trusted trees; this is not a filesystem sandbox.
 
+### Standalone skills and complete plugins
+
+Copying a skill directory does not include resources at its parent plugin or repository root. Relative paths resolve beside the instruction file; the checker does not search parent folders or guess shared resource locations. If the same relative path is absent beside the source instruction too, the finding is `source-missing`.
+
+For a **complete plugin tree** in each root, declare the plugin's location explicitly:
+
+```sh
+npx --yes agent-context-check@0.3.0 compare \
+  --source ./plugin-source --artifact ./plugin-distribution \
+  --plugin-root . --json skills/example/SKILL.md
+```
+
+`--plugin-root` is one relative path mapped inside both roots. The checker does not read the process's `CLAUDE_PLUGIN_ROOT` environment variable. Plugin-variable paths must stay inside the declared plugin scope. Without this option, a concrete plugin-root reference is an unresolved context finding; that is not a claim that a particular host's environment variable is unset or that a file was inspected and found missing. Conditional shell fallbacks and dynamically generated paths are not evaluated.
+
 ## GitHub Action
 
 Add this step **after your existing build or unpack step**, with the two corresponding skill directories:
 
 ```yaml
-- uses: oh79/agent-context-check@v0.2.0
+- uses: oh79/agent-context-check@v0.3.0
   with:
     source: ./skill
     artifact: ./dist/skill
@@ -57,13 +72,14 @@ The action uses GitHub's Node.js 24 runtime, requires no npm install, and produc
 | `source` | `.` | Source root; also the project root in check mode |
 | `artifact` | — | Prepared artifact root; required in comparison mode |
 | `files` | — | Optional newline-separated paths, relative to source |
+| `plugin-root` | — | Comparison-only relative plugin location in both trees; `.` for complete plugin roots |
 
 Outputs: `issues-count`, `files-checked`, and `references-checked`. Findings fail the action. Invalid configuration also fails; it is not reported as a successful empty scan.
 
 To check only existing local Markdown links, without a distribution:
 
 ```yaml
-- uses: oh79/agent-context-check@v0.2.0
+- uses: oh79/agent-context-check@v0.3.0
   with:
     mode: check
     source: .
@@ -75,9 +91,9 @@ To check only existing local Markdown links, without a distribution:
 The original checker remains available:
 
 ```sh
-npx --yes agent-context-check@0.2.0 --root /path/to/project
-npx --yes agent-context-check@0.2.0 --root /path/to/project --json
-npx --yes agent-context-check@0.2.0 --root /path/to/project README.md docs/setup.md
+npx --yes agent-context-check@0.3.0 --root /path/to/project
+npx --yes agent-context-check@0.3.0 --root /path/to/project --json
+npx --yes agent-context-check@0.3.0 --root /path/to/project README.md docs/setup.md
 ```
 
 Check mode ignores code spans/fences and checks Markdown link destinations only. File and directory targets are valid. Fragment IDs, query strings, external URLs, HTML links, undefined reference labels, and plain prose paths are not validated. It does not recursively follow documents linked from instruction files.
@@ -85,7 +101,7 @@ Check mode ignores code spans/fences and checks Markdown link destinations only.
 `npx` downloads the package when needed; the scanner itself never uses the network. To run from a checkout instead, use `node bin/agent-context-check.js` with the same arguments. A GitHub package installation is also available:
 
 ```sh
-npm exec --yes --package=github:oh79/agent-context-check#v0.2.0 -- agent-context-check --help
+npm exec --yes --package=github:oh79/agent-context-check#v0.3.0 -- agent-context-check --help
 ```
 
 ## JavaScript API
@@ -105,6 +121,8 @@ console.log(links);
 ```
 
 Comparison reports contain `{ filesChecked, referencesChecked, issues }`. Check reports retain `{ filesChecked, linksChecked, issues }`. Each issue includes `file`, `line`, `target`, `code`, and `message`; comparison findings include source/artifact existence flags where inspected.
+
+`comparePackage` also accepts optional `pluginRoot: '.'` when comparing complete plugins. An `unresolved-variable` finding omits existence flags because no plugin target was resolved.
 
 ## Exit status
 
@@ -128,7 +146,7 @@ node bin/agent-context-check.js compare --source examples/package-source --artif
 node bin/agent-context-check.js compare --source examples/package-source --artifact examples/package-incomplete --json
 ```
 
-The incomplete example intentionally fails. No install or build step is required. See [contributing](CONTRIBUTING.md), [examples](examples/README.md), and the [real package validation report](docs/validation-0.2.0.md).
+The incomplete example intentionally fails. No install or build step is required. See [contributing](CONTRIBUTING.md), [examples](examples/README.md), the [three reported installation regressions](https://github.com/oh79/agent-context-check/blob/v0.3.0/docs/validation-0.3.0.md), and the [earlier package validation](docs/validation-0.2.0.md).
 
 ## Early feedback
 
