@@ -93,6 +93,107 @@ test('skips inline command options while checking literal paths containing space
   ]);
 });
 
+test('skips inline script commands with positional arguments while retaining document paths with spaces', async t => {
+  const text = 'Run `docs/serve.sh preview` or `scripts/run.mjs input.json`.\nRead `docs/getting started.md`.\n';
+  const source = await fixture(t, { 'SKILL.md': text, 'docs/serve.sh': '', 'scripts/run.mjs': '', 'docs/getting started.md': '' });
+  const artifact = await fixture(t, { 'SKILL.md': text, 'docs/serve.sh': '', 'scripts/run.mjs': '' });
+  const result = await compare({ source, artifact });
+  assert.equal(result.referencesChecked, 1);
+  assert.deepEqual(result.issues.map(x => [x.line, x.target, x.code, x.sourceExists, x.artifactExists]), [
+    [2, 'docs/getting started.md', 'artifact-missing', true, false],
+  ]);
+});
+
+test('reports omitted docs and templates literal resources with their instruction lines', async t => {
+  const text = 'Read `docs/src/guide.md`.\nUse `templates/python/did.md`.\n';
+  const source = await fixture(t, { 'SKILL.md': text, 'docs/src/guide.md': '', 'templates/python/did.md': '' });
+  const artifact = await fixture(t, { 'SKILL.md': text });
+  const result = await compare({ source, artifact });
+  assert.equal(result.referencesChecked, 2);
+  assert.deepEqual(result.issues.map(x => [x.line, x.target, x.code, x.sourceExists, x.artifactExists]), [
+    [1, 'docs/src/guide.md', 'artifact-missing', true, false],
+    [2, 'templates/python/did.md', 'artifact-missing', true, false],
+  ]);
+});
+
+test('reports undeclared plugin context without inventing file existence', async t => {
+  const text = 'Run `${CLAUDE_PLUGIN_ROOT}/scripts/gate` first.\n```sh\n"${CLAUDE_PLUGIN_ROOT}/scripts/context" inspect\n```\n';
+  const source = await fixture(t, { 'SKILL.md': text }), artifact = await fixture(t, { 'SKILL.md': text });
+  const result = await compare({ source, artifact });
+  assert.equal(result.referencesChecked, 2);
+  assert.deepEqual(result.issues.map(x => [x.line, x.target, x.code]), [
+    [1, '${CLAUDE_PLUGIN_ROOT}/scripts/gate', 'unresolved-variable'],
+    [3, '${CLAUDE_PLUGIN_ROOT}/scripts/context', 'unresolved-variable'],
+  ]);
+  for (const issue of result.issues) {
+    assert.equal(Object.hasOwn(issue, 'sourceExists'), false);
+    assert.equal(Object.hasOwn(issue, 'artifactExists'), false);
+  }
+});
+
+test('uses an explicit plugin root while keeping skill-relative variables beside the instruction', async t => {
+  const text = '```sh\n"${CLAUDE_PLUGIN_ROOT}/scripts/gate" inspect\ncat "${CLAUDE_SKILL_DIR}/references/local.md"\n```\n';
+  const files = { 'plugins/main/skills/deploy/SKILL.md': text, 'plugins/main/scripts/gate': '', 'plugins/main/skills/deploy/references/local.md': '' };
+  const source = await fixture(t, files), artifact = await fixture(t, files);
+  assert.deepEqual(await compare({ source, artifact, pluginRoot: 'plugins/main' }), { filesChecked: 1, referencesChecked: 2, issues: [] });
+});
+
+test('distinguishes an omitted shared script when the plugin root was declared', async t => {
+  const text = 'Run `${CLAUDE_PLUGIN_ROOT}/scripts/gate`.\n';
+  const source = await fixture(t, { 'skills/deploy/SKILL.md': text, 'scripts/gate': '' });
+  const artifact = await fixture(t, { 'skills/deploy/SKILL.md': text });
+  const result = await compare({ source, artifact, pluginRoot: '.' });
+  assert.equal(result.referencesChecked, 1);
+  assert.deepEqual(result.issues.map(x => [x.file, x.line, x.code, x.sourceExists, x.artifactExists]), [['skills/deploy/SKILL.md', 1, 'artifact-missing', true, false]]);
+});
+
+test('reports a missing declared plugin directory as a resource omission', async t => {
+  const text = '`${CLAUDE_PLUGIN_ROOT}/scripts/gate`';
+  const source = await fixture(t, { 'SKILL.md': text, 'plugin/scripts/gate': '' }), artifact = await fixture(t, { 'SKILL.md': text });
+  const result = await compare({ source, artifact, pluginRoot: 'plugin' });
+  assert.deepEqual(result.issues.map(x => [x.code, x.sourceExists, x.artifactExists]), [['artifact-missing', true, false]]);
+});
+
+test('rejects plugin variable traversal outside its declared plugin scope', async t => {
+  const text = '`${CLAUDE_PLUGIN_ROOT}/../secret.md`';
+  const source = await fixture(t, { 'SKILL.md': text, 'secret.md': '', 'plugin/marker': '' });
+  const artifact = await fixture(t, { 'SKILL.md': text, 'secret.md': '', 'plugin/marker': '' });
+  const result = await compare({ source, artifact, pluginRoot: 'plugin' });
+  assert.equal(result.issues[0]?.code, 'outside-root');
+});
+
+test('rejects missing plugin targets beneath symlinks escaping only the plugin scope', async t => {
+  const text = '`${CLAUDE_PLUGIN_ROOT}/scripts/gate`';
+  const source = await fixture(t, { 'SKILL.md': text, 'plugin/scripts/gate': '' });
+  const artifact = await fixture(t, { 'SKILL.md': text, 'plugin/marker': '', 'elsewhere/marker': '' });
+  if (!(await link(t, path.join(artifact, 'elsewhere'), path.join(artifact, 'plugin/scripts'), 'dir'))) return;
+  const result = await compare({ source, artifact, pluginRoot: 'plugin' });
+  assert.equal(result.issues[0]?.code, 'outside-root');
+});
+
+test('rejects a declared plugin root symlink outside the artifact boundary', async t => {
+  const text = '`${CLAUDE_PLUGIN_ROOT}/scripts/gate`';
+  const source = await fixture(t, { 'SKILL.md': text, 'plugin/scripts/gate': '' }), artifact = await fixture(t, { 'SKILL.md': text });
+  const outside = await fixture(t, { 'scripts/gate': '' });
+  if (!(await link(t, outside, path.join(artifact, 'plugin'), 'dir'))) return;
+  const result = await compare({ source, artifact, pluginRoot: 'plugin' });
+  assert.equal(result.issues[0]?.code, 'outside-root');
+});
+
+test('rejects invalid plugin-root configuration rather than scanning with it', async t => {
+  const source = await fixture(t, { 'SKILL.md': '' }), artifact = await fixture(t, { 'SKILL.md': '' });
+  for (const pluginRoot of ['', '  ', null, 42, '/outside', '../plugin', 'plugin/../../secret', 'C:\\outside', 'bad\u0000root']) {
+    await assert.rejects(compare({ source, artifact, pluginRoot }), /pluginRoot/i);
+  }
+});
+
+test('skips dynamic plugin references and explicit shell output destinations', async t => {
+  const text = '```sh\n"${CLAUDE_PLUGIN_ROOT}/scripts/${variant}.sh"\ncat "${CLAUDE_PLUGIN_ROOT}/references/*.md"\n${CLAUDE_PLUGIN_ROOT:+"${CLAUDE_PLUGIN_ROOT}/scripts/conditional"}\nwrite --output "${CLAUDE_PLUGIN_ROOT}/assets/generated.json"\nwrite > "${CLAUDE_PLUGIN_ROOT}/assets/redirected.json"\n```\n';
+  const source = await fixture(t, { 'SKILL.md': text }), artifact = await fixture(t, { 'SKILL.md': text });
+  const result = await compare({ source, artifact });
+  assert.deepEqual(result, { filesChecked: 1, referencesChecked: 0, issues: [] });
+});
+
 test('ignores placeholder, dynamic and glob examples and never executes code blocks', async t => {
   const text = '[Title](URL)\n`references/*.md` `references/<name>.md` `scripts/${variant}.sh`\n<!-- `references/hidden.md` -->\n```sh\nbash "${CLAUDE_SKILL_DIR}/scripts/${variant}.sh"\ncat "${CLAUDE_SKILL_DIR}/references/*.md"\ntouch should-never-exist\n```\n';
   const source = await fixture(t, { 'SKILL.md': text }), artifact = await fixture(t, { 'SKILL.md': text });

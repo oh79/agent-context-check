@@ -15,6 +15,18 @@ async function fixture(t, text) {
   return root;
 }
 
+async function pluginFixture(t, { damaged = false } = {}) {
+  const source = await fixture(t), artifact = await fixture(t);
+  for (const root of [source, artifact]) {
+    await mkdir(path.join(root, 'skills/deploy'), { recursive: true });
+    await mkdir(path.join(root, 'scripts'));
+    await writeFile(path.join(root, 'skills/deploy/SKILL.md'), '# Deploy\n`"${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`\n');
+  }
+  await writeFile(path.join(source, 'scripts/gate.mjs'), '');
+  if (!damaged) await writeFile(path.join(artifact, 'scripts/gate.mjs'), '');
+  return { source, artifact };
+}
+
 test('CLI returns a machine-readable report and exit 1 for broken links', async (t) => {
   const root = await fixture(t, '[Missing](lost.md)');
   const result = run('--root', root, '--json');
@@ -100,4 +112,49 @@ test('compare help describes source and artifact without requiring input roots',
   assert.equal(result.status, 0);
   assert.match(result.stdout, /--source/);
   assert.match(result.stdout, /--artifact/);
+  assert.match(result.stdout, /--plugin-root/);
+});
+
+test('compare CLI fails unresolved plugin references without claiming absent files', async t => {
+  const { source, artifact } = await pluginFixture(t);
+  const result = run('compare', '--source', source, '--artifact', artifact, '--json');
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.referencesChecked, 1);
+  assert.equal(report.issues[0].code, 'unresolved-variable');
+  assert.equal(report.issues[0].file, 'skills/deploy/SKILL.md');
+  assert.equal(report.issues[0].line, 2);
+  assert.equal(Object.hasOwn(report.issues[0], 'sourceExists'), false);
+  assert.equal(Object.hasOwn(report.issues[0], 'artifactExists'), false);
+});
+
+test('compare CLI passes an explicit plugin root into the comparison', async t => {
+  const { source, artifact } = await pluginFixture(t);
+  const result = run('compare', '--source', source, '--artifact', artifact, '--plugin-root', '.', '--json');
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.referencesChecked, 1);
+  assert.deepEqual(report.issues, []);
+});
+
+test('compare CLI reports a missing script inside a declared plugin root', async t => {
+  const { source, artifact } = await pluginFixture(t, { damaged: true });
+  const result = run('compare', '--source', source, '--artifact', artifact, '--plugin-root', '.', '--json');
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const issue = JSON.parse(result.stdout).issues[0];
+  assert.equal(issue.code, 'artifact-missing');
+  assert.equal(issue.sourceExists, true);
+  assert.equal(issue.artifactExists, false);
+});
+
+test('CLI rejects missing or mode-inappropriate plugin root values', async t => {
+  const source = await fixture(t, '');
+  for (const value of [[], ['--json']]) {
+    const result = run('compare', '--source', source, '--artifact', source, '--plugin-root', ...value);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--plugin-root requires a directory/);
+  }
+  const result = run('--root', source, '--plugin-root', '.');
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Unknown option: --plugin-root/);
 });
