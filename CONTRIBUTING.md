@@ -6,7 +6,7 @@ Small fixes and reproducible parser edge cases are welcome.
 2. Add a fixture-based regression test using `node:test`. Tests use temporary directories and must not rely on network access.
 3. Run `npm test`, `npm run check`, and `npm pack --dry-run` before opening a pull request.
 
-Keep the package dependency-free. Scope is local Markdown links in agent instruction files. Remote checks, model calls, and automatic file edits are outside that scope.
+Keep the package dependency-free. Scope is local Markdown links and source/artifact availability of explicit skill references. Remote checks, model calls, installer execution, archive extraction, and automatic file edits are outside that scope.
 
 Tests exercise the public `checkProject` API and CLI exit codes. Windows, macOS, and Linux run in CI; symlink tests may skip where the host cannot create symlinks.
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -63,4 +63,41 @@ test('CLI escapes terminal control characters in source paths', async (t) => {
   assert.equal(result.status, 1);
   assert.ok(!result.stdout.includes('\x1b'));
   assert.match(result.stdout, /read-error/);
+});
+
+test('compare CLI reports a missing artifact reference with JSON and exit 1', async t => {
+  const source = await fixture(t, '[Build](scripts/build.sh)'), artifact = await fixture(t, '[Build](scripts/build.sh)');
+  await mkdir(path.join(source, 'scripts'));
+  await writeFile(path.join(source, 'scripts/build.sh'), '');
+  const result = run('compare', '--source', source, '--artifact', artifact, '--json');
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, '');
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.referencesChecked, 1);
+  assert.equal(report.issues[0].code, 'artifact-missing');
+  assert.equal(report.issues[0].sourceExists, true);
+  assert.equal(report.issues[0].artifactExists, false);
+});
+
+test('compare CLI exits cleanly for a complete explicit package and describes the comparison', async t => {
+  const source = await fixture(t, ''), artifact = await fixture(t, '');
+  const result = run('compare', '--source', source, '--artifact', artifact, 'AGENTS.md');
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /1 file.*0 reference.*0 issue/);
+});
+
+test('compare CLI rejects missing roots and mode-inappropriate options', async t => {
+  const source = await fixture(t, '');
+  for (const args of [[], ['--source', source], ['--artifact', source], ['--source'], ['--source', source, '--artifact', '/this/path/does/not/exist'], ['--root', source]]) {
+    const result = run('compare', ...args);
+    assert.equal(result.status, 2, args.join(' '));
+    assert.ok(result.stderr.length > 0);
+  }
+});
+
+test('compare help describes source and artifact without requiring input roots', () => {
+  const result = run('compare', '--help');
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--source/);
+  assert.match(result.stdout, /--artifact/);
 });

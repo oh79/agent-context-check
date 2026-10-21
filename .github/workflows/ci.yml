@@ -19,3 +19,60 @@ jobs:
       - run: npm test
       - run: npm run check
       - run: npm pack --dry-run
+  action-smoke:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare a complete package and a deliberately damaged copy
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdir, writeFile } from 'node:fs/promises';
+          for (const name of ['source', 'complete', 'missing']) {
+            const root = `.action-smoke/${name}`;
+            await mkdir(`${root}/references`, { recursive: true });
+            await writeFile(`${root}/SKILL.md`, '# Demo\n[Guide](references/guide.md)\n');
+            if (name !== 'missing') await writeFile(`${root}/references/guide.md`, '# Guide\n');
+          }
+          NODE
+      - name: Check a complete package with the reusable action
+        id: complete
+        uses: ./
+        with:
+          source: .action-smoke/source
+          artifact: .action-smoke/complete
+      - name: Detect a deliberately removed reference
+        id: missing
+        continue-on-error: true
+        uses: ./
+        with:
+          source: .action-smoke/source
+          artifact: .action-smoke/missing
+      - name: Check local links with the reusable action
+        uses: ./
+        with:
+          mode: check
+          source: .action-smoke/source
+      - name: Verify expected action outcomes and outputs
+        shell: bash
+        env:
+          COMPLETE_ISSUES: ${{ steps.complete.outputs.issues-count }}
+          COMPLETE_FILES: ${{ steps.complete.outputs.files-checked }}
+          COMPLETE_REFERENCES: ${{ steps.complete.outputs.references-checked }}
+          MISSING_OUTCOME: ${{ steps.missing.outcome }}
+          MISSING_ISSUES: ${{ steps.missing.outputs.issues-count }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          assert.equal(process.env.COMPLETE_ISSUES, '0');
+          assert.equal(process.env.COMPLETE_FILES, '1');
+          assert.equal(process.env.COMPLETE_REFERENCES, '1');
+          assert.equal(process.env.MISSING_OUTCOME, 'failure');
+          assert.equal(process.env.MISSING_ISSUES, '1');
+          NODE
