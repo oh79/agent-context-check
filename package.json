@@ -1,0 +1,21 @@
+{
+  "name": "agent-context-check",
+  "version": "0.1.0",
+  "description": "Offline checks for broken local Markdown links in AGENTS.md, CLAUDE.md and SKILL.md.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "agent-context-check": "bin/agent-context-check.js" },
+  "exports": "./src/index.js",
+  "files": ["bin", "src", "README.md", "README.ko.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test",
+    "check": "node bin/agent-context-check.js AGENTS.md",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": ["agents", "claude", "codex", "markdown", "lint", "ai", "skills"],
+  "license": "MIT",
+  "author": "Seungmin Oh (oh79)",
+  "repository": { "type": "git", "url": "https://github.com/oh79/agent-context-check.git" },
+  "bugs": { "url": "https://github.com/oh79/agent-context-check/issues" },
+  "homepage": "https://github.com/oh79/agent-context-check#readme"
+}
