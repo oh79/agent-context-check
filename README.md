@@ -5,6 +5,10 @@
 
 **Catch skill references that work in source but disappear from the package you ship.**
 
+<a href="https://github.com/user-attachments/assets/8529f54e-3a92-4edd-abcb-30eb3ae4fb4f"><img src="docs/media/poster.jpg" width="300" alt="An installed SKILL.md still references docs/src/index.md and docs/src/General/FAQ.md, but the installed docs/ folder has 0 files, so both targets are marked missing from install."></a>
+
+*18-second illustration of a pinned `using-bazzite` install: `SKILL.md` arrived, its `docs/` arrived empty. [Watch the video](https://github.com/user-attachments/assets/8529f54e-3a92-4edd-abcb-30eb3ae4fb4f) · [replay details](docs/validation-0.3.0.md).*
+
 An agent can receive `SKILL.md` while its `references/` or `scripts/` files are left behind by packaging or installation. Compare the source and the prepared distribution directory before publishing. Findings point to the instruction file and line, and distinguish a broken source reference from a file missing in the artifact.
 
 **Zero dependencies. Node.js 20+. Offline. Read-only. No API key.**
